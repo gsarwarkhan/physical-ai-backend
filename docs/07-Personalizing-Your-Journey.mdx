@@ -1,0 +1,97 @@
+---
+title: 'Personalizing Your Learning Journey'
+sidebar_label: 'Personalizing Your Journey'
+---
+
+# Personalizing Your Learning Journey
+
+This textbook is designed to be a dynamic resource that adapts to your specific needs and hardware background. To achieve this, we leverage a user profile system and content toggles to present the most relevant information for your learning environment.
+
+## Identifying Your Hardware with Better-Auth
+
+At the beginning of your journey with this textbook, you'll be prompted to sign in using our **Better-Auth** system. A key part of your user profile is the **"Primary Lab Environment"** setting.
+
+When you set up your profile, you can specify the hardware you'll be using:
+-   **Digital Twin Workstation:** For users who have a powerful local machine with an NVIDIA RTX GPU.
+-   **Cloud-Native Lab:** For users who will be renting GPU instances from a cloud provider like AWS or GCP.
+-   **Edge AI Kit:** For users who are primarily focused on deploying to and developing for a physical NVIDIA Jetson Orin Nano.
+
+Our system securely stores this preference. The textbook's front-end can then query this setting to dynamically adjust the content you see, ensuring the instructions match your setup.
+
+## The 'Personalize Content' Logic
+
+Throughout the textbook, you will encounter sections—especially those involving setup or deployment—that have a "Personalize Content" toggle or automatically display content relevant to you. This is achieved through a straightforward logic system.
+
+### How It Works
+
+Here is a simplified JavaScript-based example of the logic that runs on a page to show you the correct hardware-specific instructions:
+
+```javascript
+// This is a simplified example of the logic running on the page.
+
+function personalizePageContent() {
+  // 1. Get the user's hardware profile from the authentication system.
+  //    (In a real implementation, this would be a secure API call).
+  const userHardwareProfile = "Cloud-Native Lab"; // Example value
+
+  // 2. Hide all personalized blocks by default.
+  const allPersonalizedBlocks = document.querySelectorAll('.personalized-block');
+  allPersonalizedBlocks.forEach(block => {
+    block.style.display = 'none';
+  });
+
+  // 3. Find the specific block that matches the user's profile and display it.
+  const targetBlockClass = `.content-for-${userHardwareProfile.toLowerCase().replace(/\s+/g, '-')}`;
+  const targetBlock = document.querySelector(targetBlockClass);
+  
+  if (targetBlock) {
+    targetBlock.style.display = 'block';
+  } else {
+    // If no specific block is found, show the default instructions.
+    document.querySelector('.content-for-default').style.display = 'block';
+  }
+}
+```
+
+### Example in Markdown
+
+In practice, a chapter that discusses deploying a ROS 2 node would be written like this in markdown, with different instructions nested inside styled `div` elements:
+
+#### Deployment Example
+
+<div className="personalized-block content-for-default" style={{display: 'none'}}>
+
+**Default Deployment Instructions:**
+1.  Ensure your target device is connected to the network.
+2.  Build your ROS 2 workspace.
+3.  Source the `install/setup.bash` file.
+4.  Launch your ROS 2 node.
+
+</div>
+
+<div className="personalized-block content-for-jetson-orin-nano" style={{display: 'none'}}>
+
+**Edge Deployment (Jetson Orin Nano):**
+1.  Ensure the Jetson is powered on and connected via SSH.
+2.  Use `scp` or `rsync` to transfer your built ROS 2 package to the Jetson.
+3.  On the Jetson, source the workspace: `source ~/ros2_ws/install/setup.bash`.
+4.  Run your launch file: `ros2 launch my_package my_launch_file.py`.
+
+</div>
+
+<div className="personalized-block content-for-cloud-native-lab" style={{display: 'block'}}>
+
+**Cloud Deployment (AWS g5.2xlarge):**
+1.  From your AWS dashboard, launch a `g5.2xlarge` instance using the "NVIDIA Deep Learning AMI".
+2.  Ensure your security group has inbound rules to allow SSH access.
+3.  Connect to the instance and clone your project repository from GitHub.
+4.  Build your workspace and launch the node.
+
+</div>
+
+
+## Translation and Accessibility
+
+To make this content accessible to a broader audience, we have integrated a language-switching feature. At the start of each chapter, you will find a language toggle: **English | اردو**.
+
+This feature is powered by Docusaurus's built-in **internationalization (i18n)** system. When you click on "اردو," the website will seamlessly navigate you to the Urdu version of that page. This is possible because the textbook maintains a parallel directory of translated markdown files. These translations are provided by dedicated community contributors to ensure accuracy and readability.

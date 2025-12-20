@@ -1,0 +1,193 @@
+---
+title: 'Chapter 1: VLA, Conversational Robotics, and Cognitive Planning'
+sidebar_label: 'VLA & Cognitive Planning'
+---
+
+# Chapter 1: VLA: Conversational Robotics and Cognitive Planning
+
+Welcome to the final and most exciting module. Here, we assemble all the pieces: the ROS 2 nervous system, the high-fidelity digital twin, and the advanced perception stack. We will top this structure with a "brain"—a cognitive engine that can understand human language and formulate complex plans. This is the realm of Vision-Language-Action (VLA) models and Large Language Model (LLM) driven agents.
+
+## From Voice to Action: A Whisper-Powered Command System
+
+A truly interactive humanoid needs to understand spoken language. We can achieve this by creating a **Voice-to-Action** pipeline using OpenAI's Whisper model for transcription and ROS 2 for execution.
+
+### Tutorial: Basic Voice Command with Whisper
+
+This tutorial outlines a simple system where a spoken command is transcribed and mapped directly to a ROS 2 action.
+
+**1. Capturing and Transcribing Audio**
+
+First, we need to get audio from a microphone and convert it to text. The `whisper` Python library makes this incredibly simple.
+
+```python title="src/voice_transcriber.py"
+import whisper
+
+# Load the base model. For higher accuracy, you can use 'medium' or 'large'.
+model = whisper.load_model("base")
+
+def transcribe_audio(audio_file_path):
+    """
+    Takes the path to an audio file and returns the transcribed text.
+    """
+    print("Transcribing audio...")
+    result = model.transcribe(audio_file_path)
+    transcribed_text = result["text"].strip().lower()
+    print(f"Heard: '{transcribed_text}'")
+    return transcribed_text
+
+# Example usage with a pre-recorded audio file
+# In a real robot, you would use a library like sounddevice
+# to capture audio directly from a microphone.
+command = transcribe_audio("path/to/your/recorded_command.wav")
+# Now 'command' holds the text, e.g., "move forward"
+```
+
+**2. Mapping Text to ROS 2 Actions**
+
+Next, a ROS 2 node listens for this transcribed text and triggers a corresponding robot action.
+
+```python title="src/action_mapper_node.py"
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String       # To receive the transcribed text
+from geometry_msgs.msg import Twist # To send velocity commands
+
+class ActionMapper(Node):
+    def __init__(self):
+        super().__init__('action_mapper_node')
+        
+        # Subscribe to the topic where transcribed commands are published
+        self.subscription = self.create_subscription(
+            String,
+            '/voice_command',
+            self.command_callback,
+            10)
+        
+        # Publisher to send velocity commands to the robot's navigation system
+        self.cmd_vel_pub = self.create_publisher(Twist, '/humanoid/cmd_vel', 10)
+        
+        self.get_logger().info('Action Mapper node is ready.')
+
+    def command_callback(self, msg):
+        command = msg.data
+        self.get_logger().info(f"Received command: '{command}'")
+        
+        twist_msg = Twist()
+        
+        # Simple, direct mapping from command to action
+        if "forward" in command:
+            twist_msg.linear.x = 0.5
+        elif "stop" in command or "halt" in command:
+            twist_msg.linear.x = 0.0
+        elif "turn left" in command:
+            twist_msg.angular.z = 0.8
+        elif "turn right" in command:
+            twist_msg.angular.z = -0.8
+        else:
+            self.get_logger().warn("Command not recognized.")
+            return
+            
+        self.cmd_vel_pub.publish(twist_msg)
+
+def main(args=None):
+    rclpy.init(args=args)
+    action_mapper = ActionMapper()
+    rclpy.spin(action_mapper)
+    action_mapper.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+This simple pipeline forms the basis of conversational robotics: **Listen -> Transcribe -> Act**.
+
+## LLMs for Cognitive Planning: From 'What' to 'How'
+
+Simple commands are useful, but true intelligence requires planning. A command like "Clean the room" is abstract. A robot needs a concrete sequence of steps. This is where a Large Language Model (LLM) can act as a high-level **cognitive planner**.
+
+The process involves "prompt engineering"—crafting a query to the LLM that gives it the context and constraints it needs to generate a useful plan.
+
+### Prompting an LLM to Be a Robot Planner
+
+You must tell the LLM three things:
+1.  **Its Role:** "You are a helpful robot assistant."
+2.  **Its Abilities:** A list of the specific actions (API) it can perform.
+3.  **The Goal:** The high-level command from the user.
+
+Here is an example prompt structure:
+
+```text
+You are a helpful robot assistant integrated into a humanoid robot. Your task is to translate a high-level user command into a precise, ordered sequence of actions that you can execute.
+
+You have access to the following functions:
+- navigate_to(location): Moves the robot to a specific location. Available locations: ["kitchen_counter", "dining_table", "charging_dock"].
+- pickup(object): Picks up a specified object.
+- put_down(object, location): Places an object at a location.
+- wipe(surface): Wipes a specific surface.
+
+The user has given the following command: "Clean the dining table."
+
+Generate a plan as a JSON object containing a list of actions.
+```
+
+An LLM, given this prompt, would return a structured plan like this:
+
+```json
+{
+  "plan": [
+    {
+      "action": "navigate_to",
+      "parameters": ["kitchen_counter"]
+    },
+    {
+      "action": "pickup",
+      "parameters": ["sponge"]
+    },
+    {
+      "action": "navigate_to",
+      "parameters": ["dining_table"]
+    },
+    {
+      "action": "wipe",
+      "parameters": ["dining_table"]
+    }
+  ]
+}
+```
+A ROS 2 node would then parse this JSON and execute each step sequentially, using sensor feedback to verify the success of each action before proceeding to the next.
+
+## Capstone Project: The Autonomous Humanoid Workflow
+
+This capstone project integrates every concept from all four modules into a single, autonomous system.
+
+**Goal:** The user gives a voice command, and the humanoid robot carries out the multi-step task in a simulated apartment.
+
+**The Workflow:**
+
+1.  **Environment & Digital Twin (Module 2):**
+    *   A detailed apartment scene is built in **NVIDIA Isaac Sim**, complete with furniture, rooms, and interactable objects like apples and cups.
+    *   The humanoid's URDF is imported, creating a digital twin with simulated cameras, an IMU, LiDAR, and actuated joints.
+
+2.  **Perception & Localization (Module 3):**
+    *   As the simulation begins, the robot activates its **Isaac ROS VSLAM** node.
+    *   It looks around, processing stereo camera images, and builds a map of the apartment. Its position is now tracked within this map. Object detection nodes are also running, identifying items in the scene.
+
+3.  **Voice Command (Module 4):**
+    *   The user speaks: "Hey robot, please bring me the apple from the kitchen table."
+    *   A Python script running **Whisper** transcribes the audio into the text string `"hey robot please bring me the apple from the kitchen table"`.
+
+4.  **Cognitive Planning (Module 4):**
+    *   The transcribed text is sent to an **LLM** with a carefully engineered prompt that defines the robot's available actions (`navigate_to`, `pickup`, etc.) and known objects.
+    *   The LLM processes the request and returns a structured JSON plan.
+
+5.  **Action Execution (Module 1 & 4):**
+    *   A central ROS 2 "Behavior" node receives the JSON plan.
+    *   It reads the first step: `{ "action": "navigate_to", "parameters": ["kitchen_table"] }`.
+    *   It makes a call to the **ROS 2 Navigation Stack (Nav2)**, which uses the VSLAM map and the robot's sensor data to guide the robot to the kitchen table.
+
+6.  **Feedback and Continuation:**
+    *   The navigation stack reports success upon reaching the destination. The Behavior node then executes the next step: `{ "action": "pickup", "parameters": ["apple"] }`.
+    *   This triggers a **MoveIt2** motion plan. The robot uses its camera to find the apple's precise location, calculates an arm trajectory, and grasps the object.
+    *   This loop of **Execute -> Get Feedback -> Execute Next** continues until the final step is complete and the robot has delivered the apple to the user.
+
+This capstone workflow represents the full loop of modern robotics: a physical body, a robust nervous system, a rich sensory awareness, and a cognitive brain capable of understanding and acting upon human intent.

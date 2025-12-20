@@ -1,0 +1,93 @@
+---
+title: 'Assessments & Capstone Project'
+sidebar_label: 'Assessments & Capstone'
+---
+
+# Assessments & Capstone Project
+
+This section provides a series of project-based assessments designed to test the core competencies learned in each module. These culminate in a final capstone project that integrates all skills into a single, autonomous robotic system.
+
+## Module 1 Project: Real-Time Balance Controller
+
+**Objective:** Build a ROS 2 package that acts as a simple balance controller for a humanoid robot, preventing it from falling over in a simulation.
+
+**Core Tasks:**
+1.  **Create a ROS 2 Package:** Develop a new C++ or Python package for your controller node.
+2.  **Subscribe to IMU Data:** Your controller node must subscribe to a `sensor_msgs/msg/Imu` topic to get real-time orientation data (quaternions) for the robot's torso.
+3.  **Implement a Control Loop:**
+    -   Inside a timer-driven loop, read the orientation data.
+    -   Implement a basic Proportional (P) or Proportional-Integral-Derivative (PID) controller.
+    -   The controller's "setpoint" is a perfectly upright orientation. The "error" is the deviation from this upright state.
+4.  **Publish Corrective Commands:** Based on the calculated error, the node will publish `geometry_msgs/msg/Twist` commands to the robot's base or feet joint controllers. For instance, if the robot is tilting forward, the controller should issue a command to move the base slightly forward to compensate.
+
+**Key Learnings:** This project will solidify your understanding of the fundamental ROS 2 architecture: creating nodes, using standard message types, implementing a publisher/subscriber pattern, and applying basic real-time control theory.
+
+## Module 2 Project: High-Fidelity Simulation Environment
+
+**Objective:** Configure a realistic simulation environment in Gazebo, focusing on accurate physics and sensor models.
+
+**Core Tasks:**
+1.  **Refine the URDF:** Take a standard humanoid URDF and meticulously define the `<collision>` and `<inertial>` tags for every major link (torso, arms, legs). Make the collision geometry a simpler, efficient version of the `<visual>` geometry.
+2.  **Build a World:** Create a Gazebo world file containing a ground plane and at least five different obstacles (e.g., cubes, spheres, walls).
+3.  **Add and Configure Sensors:**
+    -   Attach a simulated 3D LiDAR sensor and a depth camera to the robot's head link in the URDF.
+    -   In the Gazebo-specific tags (`<gazebo>`), configure these sensors to include realistic noise. For the depth camera, apply Gaussian noise to the depth data. For the LiDAR, apply noise to the range readings.
+
+**Key Learnings:** You will gain hands-on experience with the critical aspects of creating a digital twin: defining a robot's physical properties for simulation, building structured environments, and understanding how to model the imperfections of real-world sensors.
+
+## Module 3 Project: Isaac-Based Perception Pipeline
+
+**Objective:** Use NVIDIA Isaac Sim to create a perception pipeline that can identify and locate specific objects in a scene.
+
+**Core Tasks:**
+1.  **Set up the Scene:** In Isaac Sim, create a room with a table. Place three distinct, brightly colored objects on the table (e.g., a red can, a blue box, a green bottle).
+2.  **Enable Synthetic Data:** Configure the camera on your simulated robot to generate RGB images and, crucially, **semantic segmentation** data. Assign unique semantic labels to each of the three target objects.
+3.  **Develop a Perception Node:** Create a Python ROS 2 node that:
+    -   Subscribes to the camera's RGB image and semantic segmentation image topics.
+    -   Processes the segmentation image to find pixels corresponding to your target objects.
+    -   Calculates the 2D bounding box or centroid of each identified object in the image.
+    -   Publishes the name and 2D location of each detected object to a custom ROS 2 topic.
+
+**Key Learnings:** This project teaches the fundamentals of modern, AI-driven robotics: using synthetic data generation for perception, working with image pipelines in ROS 2, and implementing basic object identification algorithms.
+
+---
+
+## Capstone Project: The Autonomous Humanoid Challenge
+
+**Objective:** Integrate all previous modules to build an autonomous humanoid that can understand a spoken command and perform a complete "fetch" task in a simulated environment.
+
+### The Workflow
+
+1.  **The Command:** The user speaks a command, e.g., "Robot, please bring me the red can from the table."
+2.  **Listen & Transcribe:** A Python script using **OpenAI Whisper** captures the audio and transcribes it to text.
+3.  **Plan the Task:** The transcribed text is fed into a **Large Language Model (LLM)**, which is prompted to act as a task planner. It uses its knowledge of the robot's capabilities to generate a JSON-formatted plan, such as: `[{"action": "navigate_to", "target": "table"}, {"action": "pickup", "target": "red_can"}, {"action": "navigate_to", "target": "user"}, {"action": "place", "target": "red_can"}]`.
+4.  **Execute the Plan:**
+    -   A central "behavior" node in ROS 2 parses the plan.
+    -   It initiates the `navigate_to` action, using a **VSLAM** node for localization and the **Nav2** stack for path planning and obstacle avoidance.
+    -   Upon reaching the table, it uses the **Isaac Sim perception pipeline** to get the precise location of the `red_can`.
+    -   It calls a **MoveIt2** motion planner to generate a trajectory for the arm to `pickup` the can.
+    -   It then repeats this process to `navigate_to` the user and `place` the object.
+
+### Capstone Grading Rubric (100 Points Total)
+
+This rubric reflects the scoring for a competitive hackathon or final project evaluation.
+
+**1. ROS 2 Architecture (20 Points)**
+-   **10 pts:** Code is well-organized into logical ROS 2 packages and nodes.
+-   **5 pts:** Efficient and correct use of topics, services, and actions.
+-   **5 pts:** System is launchable from a single, well-written main launch file.
+
+**2. Simulation Fidelity & Perception (25 Points)**
+-   **10 pts:** VSLAM system successfully builds a map and localizes the robot within it in real-time.
+-   **10 pts:** Perception pipeline reliably identifies and distinguishes between the different target objects.
+-   **5 pts:** The robot's navigation stack successfully avoids all static obstacles in the path.
+
+**3. Task Planning & Execution (40 Points)**
+-   **10 pts:** Voice command is correctly transcribed and sent to the planner.
+-   **10 pts:** LLM successfully generates a correct and logical plan in the specified JSON format.
+-   **15 pts:** Robot successfully and completely executes the full, multi-step plan without manual intervention.
+-   **5 pts:** Object manipulation (grasping and placing) is smooth and successful.
+
+**4. Code Quality & Documentation (15 Points)**
+-   **10 pts:** A `README.md` file clearly explains the project architecture and provides step-by-step instructions for launching and running the full simulation.
+-   **5 pts:** Code is clean, readable, and reasonably commented.

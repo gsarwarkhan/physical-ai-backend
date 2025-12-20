@@ -1,0 +1,118 @@
+---
+title: 'Chapter 1: ROS 2 Architecture for Humanoids'
+sidebar_label: 'ROS 2 Architecture'
+---
+
+import { styles } from 'react-slick';
+
+# Chapter 1: ROS 2 Architecture for Humanoids
+
+Welcome to the foundational chapter of our journey into humanoid robotics. Before we can make a robot walk, talk, or think, we must first build its nervous system. In modern robotics, that nervous system is the **Robot Operating System (ROS) 2**.
+
+## The Nervous System of a Robot
+
+Think of a humanoid robot's body: it's a complex collection of sensors (eyes, balance, touch), actuators (motors in the joints), and a central computer (the brain). For these parts to work together, they need a robust, real-time communication network. ROS 2 provides this network. It's the framework that allows different software components to discover each other, send data, and trigger actions, much like how your brain sends nerve signals to your legs to make them move.
+
+## Core ROS 2 Components
+
+ROS 2's architecture is built on three fundamental concepts that you must understand: Nodes, Topics, and Services.
+
+### 1. Nodes: The Brain's Processing Centers
+
+A **Node** is the smallest, most fundamental processing unit in ROS 2. Each node should be responsible for a single, well-defined task.
+
+-   **Analogy:** Think of a node as a specific region of the brain. You might have one node for processing camera data (the visual cortex), another for planning movements (the motor cortex), and a third for monitoring battery levels (the brainstem regulating bodily functions).
+
+-   **In Practice:** In a humanoid, you would have separate nodes for:
+    -   `camera_driver_node`: Publishes images from the head cameras.
+    -   `ai_agent_node`: Makes high-level decisions.
+    -   `leg_controller_node`: Controls the motors in the left leg.
+    -   `imu_sensor_node`: Publishes balance and orientation data.
+
+### 2. Topics: The Never-Ending Nerve Signals
+
+**Topics** are the buses that nodes use to send and receive data. They follow a publish-subscribe model. One or more nodes can **publish** (send) messages to a topic, and one or more nodes can **subscribe** (receive) messages from that same topic.
+
+-   **Analogy:** Topics are the nerve pathways carrying continuous streams of information. For example, the optic nerve constantly sends visual data from your eye to your brain.
+
+-   **In Practice:** The `ai_agent_node` might decide the robot needs to walk forward. It will **publish** a velocity command to the `/humanoid/leg_controllers/cmd_vel` topic. The `leg_controller_node`s for both the left and right legs will be **subscribed** to this topic, receive the command, and actuate the motors accordingly. This is a one-way, continuous stream of data.
+
+### 3. Services: Direct Questions and Answers
+
+While topics are for continuous streams, **Services** are for request-response interactions. A client node sends a request to a service, and the service node performs a task and sends back a single response.
+
+-   **Analogy:** A service is like asking a direct question and expecting an answer. For instance, "Am I hungry?" The answer is a simple "yes" or "no," not a continuous stream of data about your stomach's state.
+
+-   **In Practice:** The `ai_agent_node` might need to know the exact angle of the knee joint before planning a kick. It would call a service named `/humanoid/left_leg/get_joint_angle` provided by the `leg_controller_node`. The controller would then read the motor's encoder and send back the precise angle.
+
+## Python Example: AI Agent Commanding a Leg
+
+Let's see this in action. Here is a Python example using the `rclpy` library. We will create an "AI Agent" node that makes a decision and publishes a velocity command. This is the "brain" sending a signal down the "nervous system."
+
+```python title="src/ai_agent_publisher.py"
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist  # A standard message type for velocity commands
+
+class AIAgentPublisher(Node):
+    """
+    A simple AI Agent node that decides to make the robot walk forward
+    and publishes the velocity command to the leg controllers.
+    """
+    def __init__(self):
+        super().__init__('ai_agent_publisher')
+        
+        # Create a publisher on the '/humanoid/cmd_vel' topic.
+        # The leg controller nodes will subscribe to this topic.
+        # The message type is Twist, which is standard for velocity.
+        # The queue size of 10 is a quality of service setting.
+        self.publisher_ = self.create_publisher(Twist, '/humanoid/cmd_vel', 10)
+        
+        # We'll use a timer to publish a command every 0.5 seconds.
+        timer_period = 0.5  # seconds
+        self.timer = self.create_timer(timer_period, self.timer_callback)
+        
+        self.get_logger().info('AI Agent node has started. Publishing velocity commands...')
+
+    def timer_callback(self):
+        # Create a new Twist message
+        msg = Twist()
+        
+        # Set the linear velocity in the x-axis to 0.5 m/s.
+        # This represents a command to move forward.
+        msg.linear.x = 0.5
+        
+        # Publish the message to the topic
+        self.publisher_.publish(msg)
+        
+        # Log the action
+        self.get_logger().info(f'Publishing: "linear.x: {msg.linear.x}"')
+
+def main(args=None):
+    # Initialize the rclpy library
+    rclpy.init(args=args)
+    
+    # Create the AI Agent node
+    ai_agent_publisher = AIAgentPublisher()
+    
+    # Spin the node so it can process callbacks (like the timer)
+    # This keeps the node alive until you shut it down (e.g., with Ctrl+C)
+    rclpy.spin(ai_agent_publisher)
+    
+    # Clean up and destroy the node when done
+    ai_agent_publisher.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+### How This Fits the Nervous System Analogy
+
+1.  **Node:** The `AIAgentPublisher` class is our "brain" component, a single-purpose node focused on issuing commands.
+2.  **Topic:** The `/humanoid/cmd_vel` string is the "nerve pathway." It's a named channel where velocity data is sent.
+3.  **Message:** The `Twist` object is the "nerve signal" itself, containing the specific data (move forward at 0.5 m/s) being transmitted.
+4.  **Publisher:** The `self.publisher_` object is the "synapse," responsible for sending the signal out from the AI Agent node.
+5.  **Subscriber (Implied):** Somewhere else in our robot's code, one or more leg controller nodes would be subscribed to `/humanoid/cmd_vel`, ready to receive this signal and turn it into physical motion.
+
+With this foundation, you can now see how ROS 2 allows us to build a complex, decoupled system where different parts of the robot's "mind" and "body" can communicate and coordinate effectively.

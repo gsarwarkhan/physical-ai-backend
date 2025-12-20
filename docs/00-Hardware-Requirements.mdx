@@ -1,0 +1,62 @@
+---
+title: 'Hardware Requirements Guide'
+sidebar_label: 'Hardware Requirements'
+---
+
+# Hardware Requirements Guide
+
+Building and simulating advanced humanoid robots is a computationally intensive task. Unlike standard software development, success in this field is directly tied to the capabilities of your hardware. This guide outlines the recommended workstation specifications and explains the budgeting trade-offs between building a physical lab versus using cloud services.
+
+## Recommended Digital Twin Workstation
+
+This configuration is designed to handle the simultaneous demands of running a high-fidelity physics simulation (NVIDIA Isaac Sim) and a large AI model (VLA/LLM).
+
+-   **Operating System:** Ubuntu 22.04 LTS (or 20.04). ROS 2 and NVIDIA's developer tools are primarily developed and tested on Linux.
+-   **CPU:** 8-core processor or better (e.g., Intel Core i7/i9, AMD Ryzen 7/9).
+    -   *Why?* While the GPU does the heavy lifting, a powerful CPU is still needed for the OS, code compilation, and running various non-accelerated ROS 2 nodes.
+-   **GPU:** **NVIDIA RTX Series GPU with 12 GB of VRAM minimum (24 GB highly recommended).**
+    -   *Examples:* GeForce RTX 3080 (12GB), RTX 3090 (24GB), RTX 4090 (24GB), or professional NVIDIA RTX Ada Generation cards.
+    -   *This is a mandatory, non-negotiable requirement. See the detailed explanation below.*
+-   **System RAM:** 32 GB minimum, 64 GB recommended.
+    -   *Why?* Large, complex simulation environments and datasets must be loaded into system RAM. Insufficient RAM will be a major bottleneck.
+-   **Storage:** 1 TB NVMe SSD or better.
+    -   *Why?* Simulation assets (3D models, textures) can be massive. A fast SSD dramatically reduces load times for complex scenes.
+
+## Why an NVIDIA RTX GPU with High VRAM is Mandatory
+
+There is no substitute for an NVIDIA RTX GPU in this workflow. The entire software stack, from simulation to AI, is built on NVIDIA's proprietary hardware and software ecosystem.
+
+1.  **Isaac Sim is Built on NVIDIA Omniverse:**
+    -   **CUDA Cores:** Isaac Sim uses the CUDA platform for massively parallel computations, which are essential for simulating physics, sensor data, and robot dynamics in real-time.
+    -   **RTX (Ray Tracing) Cores:** Photorealistic rendering and, more importantly, physically accurate sensor simulation rely on hardware-accelerated ray tracing. An RTX GPU's dedicated RT Cores are used to simulate LiDAR scans, camera feeds, and depth sensors with high fidelity. AMD or Intel GPUs lack this dedicated hardware and the corresponding software integration.
+
+2.  **VLA/LLM Models are VRAM-Hungry:**
+    -   Large Language Models and Vision-Language-Action models are enormous. A 7-billion parameter model (one of the smaller sizes) can easily consume **14-16 GB of VRAM** when loaded in 16-bit precision.
+    -   The entire model must reside in the GPU's VRAM for high-speed inference. If the model doesn't fit, it cannot run.
+
+3.  **The Simultaneous Workload:**
+    Your GPU's VRAM must be large enough to hold, at the same time:
+    -   The entire Isaac Sim environment (3D assets, textures, lighting data).
+    -   The buffers for the rendered images and sensor data.
+    -   The **entire multi-billion parameter AI model**.
+
+    If your VRAM is exhausted, the system will either crash or slow to an unusable crawl as it tries to swap memory with the much slower system RAM. Therefore, a high-VRAM NVIDIA RTX card is the absolute foundation of a capable Physical AI development workstation.
+
+## Lab Budgeting: On-Premise vs. Cloud-Native
+
+For students and educational labs, acquiring this hardware presents a classic budgeting choice: a large one-time capital expense (CapEx) or a recurring operational expense (OpEx).
+
+| Factor                       | On-Premise Workstation (High CapEx)                                   | Cloud-Native Lab (High OpEx)                                             |
+| ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **Description**              | Buying a physical, high-end workstation.                              | Renting a powerful GPU-enabled virtual machine from a cloud provider.    |
+| **Upfront Cost**             | **Very High** ($3,000 - $7,000+ per machine).                           | **Very Low** ($0).                                                       |
+| **Running Cost**             | Low (electricity).                                                    | **Very High** ($2.00 - $5.00+ per hour).                                   |
+| **The Biggest Risk**         | Hardware becomes outdated in 3-5 years.                               | **FORGETTING TO SHUT DOWN THE INSTANCE.** A forgotten weekend can cost hundreds of dollars. |
+| **Performance**              | Excellent and latency-free.                                           | Excellent, but interaction is subject to internet latency.               |
+| **Hardware Access**          | Limited to what you bought.                                           | Access to the latest and most powerful GPUs (e.g., NVIDIA H100).         |
+| **Maintenance**              | You are responsible for all maintenance and repairs.                  | Zero maintenance required.                                               |
+
+### Recommendation for Students
+
+-   **For a short project or final capstone (1-3 months):** A **Cloud-Native** approach is often more feasible. The pay-as-you-go model avoids a prohibitive upfront cost. **Set aggressive billing alerts and calendar reminders to shut down your instances.**
+-   **For a long-term research lab or multi-year program:** An **On-Premise** workstation is more cost-effective over the long run if it's used consistently. The initial investment pays for itself by avoiding thousands of dollars in hourly cloud fees.
