@@ -1,42 +1,52 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse # Import JSONResponse
-from pydantic import BaseModel, Field # Import Field for APIErrorResponse
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
-from uuid import UUID, uuid4
-from sqlmodel import Session, select
-from datetime import datetime
-import logging # Import logging
+from uuid import UUID
+from sqlmodel import Session
+import os
+import logging
 
 from router import ai_wrapper
-from database import ChatSession, Message, create_db_and_tables, engine 
-from crud import ( # Import CRUD functions
+from database import ChatSession, create_db_and_tables, engine
+from crud import (
     get_chat_session_by_id, 
     create_new_chat_session, 
     get_messages_for_session, 
     add_message_to_session
 )
 
-# Configure basic logging
+# --------------------------
+# Logging Configuration
+# --------------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# --------------------------
+# FastAPI App & CORS
+# --------------------------
 app = FastAPI()
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://hackathon-1-q4.vercel.app"  # your frontend URL
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --------------------------
+# Request / Response Models
+# --------------------------
 class ChatRequest(BaseModel):
     session_id: Optional[UUID] = None
     message: str
 
-# Define API response models for structured output
 class APIResponse(BaseModel):
     status: str = "success"
     message: Optional[str] = None
@@ -44,21 +54,34 @@ class APIResponse(BaseModel):
 
 class APIErrorResponse(BaseModel):
     status: str = "error"
-    message: str = Field(..., description="A detailed error message.")
-    code: Optional[int] = Field(None, description="An optional error code.")
+    message: str = Field(..., description="Detailed error message")
+    code: Optional[int] = Field(None, description="Optional error code")
 
+# --------------------------
+# DB Session Dependency
+# --------------------------
 def get_session():
     with Session(engine) as session:
         yield session
 
+# --------------------------
+# Startup Event
+# --------------------------
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
+    logger.info("Database tables created successfully.")
 
+# --------------------------
+# Health Check
+# --------------------------
 @app.get("/")
 def health_check():
     return {"status": "ok", "message": "Physical AI & Humanoid Robotics Chatbot is healthy"}
 
+# --------------------------
+# Chat Endpoint
+# --------------------------
 @app.post("/chat", response_model=APIResponse, responses={
     400: {"model": APIErrorResponse, "description": "Invalid Request"},
     500: {"model": APIErrorResponse, "description": "Internal Server Error"},
@@ -66,6 +89,9 @@ def health_check():
 })
 async def chat(request: ChatRequest, db_session: Session = Depends(get_session)):
     try:
+        # --------------------------
+        # Handle Chat Session
+        # --------------------------
         chat_session: Optional[ChatSession] = None
 
         if request.session_id:
@@ -73,50 +99,53 @@ async def chat(request: ChatRequest, db_session: Session = Depends(get_session))
 
         if not chat_session:
             chat_session = create_new_chat_session(db_session)
-            logger.info(f"Created new session: {chat_session.id}")
+            logger.info(f"Created new chat session: {chat_session.id}")
 
-        # Retrieve messages for the current session from DB
+        # --------------------------
+        # Retrieve conversation
+        # --------------------------
         db_messages = get_messages_for_session(db_session, chat_session.id)
-        
-        # Convert DB messages to AIWrapper format
-        current_conversation_history = [
-            {"sender": msg.sender, "text": msg.text} for msg in db_messages
-        ]
+        conversation_history = [{"sender": msg.sender, "text": msg.text} for msg in db_messages]
 
-        # Add the new user message to the conversation history (for AI processing)
-        new_user_message_dict = {"sender": "user", "text": request.message}
-        current_conversation_history.append(new_user_message_dict)
-
-        # Save user message to DB
+        # Add user message
+        conversation_history.append({"sender": "user", "text": request.message})
         add_message_to_session(db_session, chat_session.id, "user", request.message)
 
+        # --------------------------
         # Get AI response
-        ai_response_text = ai_wrapper.get_ai_response(current_conversation_history)
-
-        # Save AI message to DB
+        # --------------------------
+        ai_response_text = ai_wrapper.get_ai_response(conversation_history)
         add_message_to_session(db_session, chat_session.id, "ai", ai_response_text)
 
         return APIResponse(
-            status="success", 
+            status="success",
             data={"response": ai_response_text, "session_id": chat_session.id}
         )
 
-    except ValueError as e: # Catch specific AI errors from router.py
+    except ValueError as e:
         logger.error(f"AI Service Error for session {request.session_id}: {e}")
         return JSONResponse(
             status_code=502,
             content=APIErrorResponse(status="error", message=str(e), code=502).dict()
         )
     except HTTPException as e:
-        logger.warning(f"HTTP Exception caught: {e.detail}")
-        raise e # Re-raise FastAPI HTTPExceptions
+        logger.warning(f"HTTP Exception: {e.detail}")
+        raise e
     except Exception as e:
-        logger.exception(f"An unexpected internal server error occurred for session {request.session_id}.") # Log full traceback
+        logger.exception(f"Unexpected internal server error for session {request.session_id}")
         return JSONResponse(
             status_code=500,
-            content=APIErrorResponse(status="error", message="An unexpected internal server error occurred.", code=500).dict()
+            content=APIErrorResponse(
+                status="error",
+                message="An unexpected internal server error occurred.",
+                code=500
+            ).dict()
         )
 
+# --------------------------
+# Run server
+# --------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
