@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional
+from typing import Dict, Optional
 from uuid import UUID
 from sqlmodel import Session
 import os
@@ -11,29 +11,34 @@ import logging
 from router import ai_wrapper
 from database import ChatSession, create_db_and_tables, engine
 from crud import (
-    get_chat_session_by_id, 
-    create_new_chat_session, 
-    get_messages_for_session, 
+    get_chat_session_by_id,
+    create_new_chat_session,
+    get_messages_for_session,
     add_message_to_session
 )
 
 # --------------------------
 # Logging Configuration
 # --------------------------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # --------------------------
 # FastAPI App & CORS
 # --------------------------
-app = FastAPI()
+app = FastAPI(title="Physical AI & Humanoid Robotics Chatbot")
 
+# Allow both localhost for dev and Vercel URLs
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "https://hackathon-1-q4.vercel.app"  # your frontend URL
+        "https://hackathon-1-q4.vercel.app",
+        "https://physical-ai-backend.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -77,7 +82,7 @@ def on_startup():
 # --------------------------
 @app.get("/")
 def health_check():
-    return {"status": "ok", "message": "Physical AI & Humanoid Robotics Chatbot is healthy"}
+    return {"status": "ok", "message": "RAG Chatbot API is running"}
 
 # --------------------------
 # Chat Endpoint
@@ -143,7 +148,7 @@ async def chat(request: ChatRequest, db_session: Session = Depends(get_session))
         )
 
 # --------------------------
-# Run server
+# Run server (for local testing)
 # --------------------------
 if __name__ == "__main__":
     import uvicorn
