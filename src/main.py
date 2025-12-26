@@ -1,213 +1,199 @@
+"""This is the main backend server for the RAG chatbot.
+It uses FastAPI to expose a /chat endpoint that leverages a Qdrant vector database
+and OpenRouter for AI-powered chat completions."""
 import os
 import logging
-from typing import List, Union, Dict, Any
+from contextlib import asynccontextmanager
+from typing import List
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter # Kept for potential future use or if needed by QdrantClient internally
-import cohere
-import numpy as np # Used for potential np.ndarray to list conversion
+from pydantic import BaseModel, Field
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+from openai import OpenAI
+from qdrant_client import QdrantClient, models
 
-# --- Configuration ---
-# Ensure these environment variables are set
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("rag-chatbot-api")
 
-MAX_CONTEXT_LENGTH = 10000 # Maximum characters for context passed to LLM
+# --- Environment Variable Loading and Validation ---
+def load_env_vars():
+    """Loads and validates required environment variables."""
+    
+    required_vars = {
+        "QDRANT_URL": os.getenv("QDRANT_URL"),
+        "QDRANT_API_KEY": os.getenv("QDRANT_API_KEY"),
+        "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY"),
+        "OPENROUTER_BASE_URL": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        "OPENROUTER_EMBEDDING_MODEL": os.getenv("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-small"),
+        "OPENROUTER_CHAT_MODEL": os.getenv("OPENROUTER_MODEL", "mistralai/mixtral-8x7b-instruct"),
+        "QDRANT_COLLECTION_NAME": os.getenv("QDRANT_COLLECTION_NAME", "humanoid_textbook"),
+    }
+    
+    missing_vars = [key for key, value in required_vars.items() if value is None]
+    if missing_vars:
+        message = f"Missing required environment variables: {', '.join(missing_vars)}"
+        logger.error(message)
+        raise ValueError(message)
+        
+    logger.info("All required environment variables are loaded.")
+    return required_vars
+
+config = load_env_vars()
+
+# --- FastAPI Lifecycle (Resource Management) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manages the lifecycle of resources needed by the application.
+    Initializes Qdrant and OpenAI clients on startup and closes them on shutdown.
+    """
+    logger.info("Initializing clients...")
+    # Initialize Qdrant client
+    app.state.qdrant_client = QdrantClient(
+        url=config["QDRANT_URL"],
+        api_key=config["QDRANT_API_KEY"],
+    )
+    # Initialize OpenAI client for OpenRouter
+    app.state.openai_client = OpenAI(
+        api_key=config["OPENROUTER_API_KEY"],
+        base_url=config["OPENROUTER_BASE_URL"],
+    )
+    logger.info("Qdrant and OpenAI clients initialized successfully.")
+    
+    yield
+    
+    # Cleanup clients on shutdown
+    logger.info("Closing clients...")
+    # No explicit close method for qdrant_client or openai client in recent versions
+    app.state.qdrant_client = None
+    app.state.openai_client = None
+    logger.info("Clients closed.")
 
 # --- FastAPI App Initialization ---
 app = FastAPI(
-    title="RAG Chatbot API",
-    description="A RAG-based chatbot using Cohere and Qdrant.",
+    title="Physical AI Humanoid Textbook - RAG Chatbot API",
     version="1.0.0",
+    lifespan=lifespan
 )
 
-# --- CORS Middleware ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001"], # Explicitly allow frontend origin
-    allow_credentials=True, # Allow cookies/auth headers from this origin
-    allow_methods=["GET", "POST", "OPTIONS"], # Explicitly allow methods needed, OPTIONS for preflight
-    allow_headers=["Content-Type"], # Explicitly allow Content-Type header
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --- Service Clients Initialization ---
-qdrant_client_instance: QdrantClient = None
-cohere_client_instance: cohere.Client = None
+# --- API Models ---
+class ChatRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="The user's question for the chatbot.")
 
-@app.on_event("startup")
-async def startup_event():
-    global qdrant_client_instance, cohere_client_instance
+class ChatResponse(BaseModel):
+    response: str = Field(..., description="The chatbot's answer.")
 
+# --- API Endpoints ---
+@app.get("/", summary="Health Check")
+def health_check():
+    """Provides a simple health check endpoint."""
+    return {"status": "ok", "message": "Physical AI & Humanoid Robotics Chatbot is healthy"}
+
+@app.post("/chat", response_model=ChatResponse, summary="Process a Chat Request")
+async def chat(req: Request, chat_request: ChatRequest):
+    """
+    Handles the main chat logic, including RAG retrieval and AI generation.
+    """
+    openai_client: OpenAI = req.app.state.openai_client
+    qdrant_client: QdrantClient = req.app.state.qdrant_client
+    
+    # 1. Generate Embedding for the User's Query
     try:
-        if not QDRANT_URL or not QDRANT_API_KEY:
-            raise ValueError("QDRANT_URL and QDRANT_API_KEY environment variables must be set.")
-        qdrant_client_instance = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        logger.info("Qdrant client initialized successfully.")
-
-        if not COHERE_API_KEY:
-            raise ValueError("COHERE_API_KEY environment variable must be set.")
-        cohere_client_instance = cohere.Client(api_key=COHERE_API_KEY)
-        logger.info("Cohere client initialized successfully.")
-        
+        embed_response = openai_client.embeddings.create(
+            model=config["OPENROUTER_EMBEDDING_MODEL"],
+            input=[chat_request.prompt]
+        )
+        query_vector = embed_response.data[0].embedding
     except Exception as e:
-        logger.error(f"Failed to initialize service clients on startup: {e}", exc_info=True)
-        raise
+        logger.error(f"Embedding failed for query: '{chat_request.prompt}'. Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create text embedding: {e}")
 
-# --- Pydantic Models ---
-class AskRequest(BaseModel):
-    question: str
-    user_context: str = ""
-
-class AskResponse(BaseModel):
-    answer: str
-
-# --- Health Check Endpoint ---
-@app.get("/", status_code=status.HTTP_200_OK)
-async def health_check():
-    """
-    Health check endpoint to test if the server is alive.
-    """
-    logger.info("Health check endpoint hit.")
-    return {"status": "alive", "message": "RAG Chatbot API is running!"}
-
-# --- FINAL ROBUST RAG PIPELINE HANDLER ---
-@app.post("/ask", response_model=AskResponse)
-async def ask_chatbot(request: AskRequest):
-    """
-    Handles a user's question by performing Retrieval-Augmented Generation.
-    1.  Generates an embedding for the user's question using Cohere.
-    2.  Searches Qdrant for the most relevant context using the embedding.
-    3.  Assembles and truncates context from Qdrant results.
-    4.  Generates an answer using Cohere command-r.
-    """
-    if not request.question:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question cannot be empty.")
-
+    # 2. Search Qdrant for Relevant Context
     try:
-        # 1. Generate query embedding using Cohere
-        if cohere_client_instance is None:
-            raise RuntimeError("Cohere client not initialized.")
-            
-        embed_response = cohere_client_instance.embed(
-            texts=[request.question],
-            model='embed-english-v3.0',
-            input_type='search_query' # Crucial for query-time embeddings as per spec
+        search_results = qdrant_client.search(
+            collection_name=config["QDRANT_COLLECTION_NAME"],
+            query_vector=query_vector,
+            limit=3,  # Retrieve top 3 most relevant chunks
+            with_payload=True,
         )
-        question_embedding = embed_response.embeddings[0] # This should be List[float]
-        logger.info("Cohere embedding generated successfully.") # Debug log
-        
     except Exception as e:
-        logger.error(f"Cohere API (embedding) failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate embedding with Cohere: {e}"
-        )
+        logger.error(f"Qdrant search failed. Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to search for context: {e}")
 
+    # 3. Assemble Context from Search Results
+    context_chunks: List[str] = []
+    if search_results:
+        for point in search_results:
+            # Defensively extract text from payload
+            if point.payload and isinstance(point.payload.get("text"), str):
+                context_chunks.append(point.payload["text"])
+    
+    if not context_chunks:
+        logger.warning(f"No relevant context found in database for query: '{chat_request.prompt}'")
+        # Fallback: answer without context
+        context_str = "No specific context found in the textbook."
+    else:
+        context_str = "\n\n---\n\n".join(context_chunks)
+
+    # 4. Construct the Final Prompt for the Chat Model
+    system_prompt = """
+    You are a specialized professor for the 'Physical AI & Humanoid Robotics' textbook.
+    Your role is to provide clear, accurate, and helpful answers to student questions.
+    You must base your answers *only* on the context provided below from the textbook.
+    If the context does not contain the answer, state that the information is not available in the provided materials.
+    Do not use any prior knowledge. Be concise and directly address the question.
+    """.strip()
+    
+    user_prompt = f"""
+Context from the textbook:
+---
+{context_str}
+---
+
+Student's Question:
+{chat_request.prompt}
+    """.strip()
+
+    # 5. Generate the Final Answer using OpenRouter
     try:
-        # 2. Perform Qdrant vector search
-        if qdrant_client_instance is None:
-            raise RuntimeError("Qdrant client not initialized.")
-            
-        # Ensure question_embedding is a list of floats, as required by qdrant_client.search
-        if isinstance(question_embedding, np.ndarray):
-            question_embedding_list = question_embedding.tolist()
-        else:
-            question_embedding_list = question_embedding
-        
-        search_results = qdrant_client_instance.query_points(
-            collection_name="humanoid_textbook",
-            query=question_embedding_list, # Pass the Cohere embedding directly to 'query'
-            limit=3,
+        chat_completion = openai_client.chat.completions.create(
+            model=config["OPENROUTER_CHAT_MODEL"],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            # Add headers required by some OpenRouter models
+            extra_headers={
+                "HTTP-Referer": "http://localhost:3000",
+                "X-Title": "Physical AI & Humanoid Robotics Textbook",
+            }
         )
-        logger.info(f"Qdrant search returned {len(search_results)} results.") # Debug log
-        
-        # Defensive handling: Empty Qdrant results
-        if not search_results:
-            logger.warning("Qdrant search returned no relevant documents for the query.")
-            return {"answer": "I couldn't find any relevant information in the textbook to answer your question. Please try rephrasing or ask a different question."}
-
-        # 3. Safely assemble context from payload
-        assembled_context_parts = []
-        for res in search_results:
-            # Defensive handling: Missing payload text field
-            text_content = res.payload.get('text', '')
-            if text_content: # Only add if text content is not empty
-                assembled_context_parts.append(f"--- Context Snippet from: {res.payload.get('source', 'Unknown')} ---\n{text_content}")
-            else:
-                logger.warning(f"Qdrant result {res.id} missing 'text' in payload or text is empty.")
-        
-        context = "\n\n".join(assembled_context_parts)
-        
-        # Defensive handling: Truncate context to a safe size
-        if len(context) > MAX_CONTEXT_LENGTH:
-            logger.warning(f"Context truncated from {len(context)} to {MAX_CONTEXT_LENGTH} characters before sending to LLM.")
-            context = context[:MAX_CONTEXT_LENGTH]
-        elif not context: # If after assembly and potential truncation, context is still empty
-            logger.warning("Assembled context is empty after Qdrant search.")
-            return {"answer": "I found some documents, but couldn't extract useful context to answer your question. Please try rephrasing."}
-
-        logger.debug(f"Assembled context: {context[:500]}...") # Log first 500 chars of context
-        
-    except Exception as e:
-        logger.error(f"Qdrant retrieval or context assembly failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve context from Qdrant: {e}"
-        )
-
-    try:
-        # 4. Generate an answer using Cohere command-r
-        if cohere_client_instance is None:
-            raise RuntimeError("Cohere client not initialized.")
-
-        prompt = f"""
-        You are an expert AI tutor for a course on Physical AI and Humanoid Robotics.
-A student has asked a question. Use the following context from the course textbook to provide a clear,
-professional, and helpful answer. Ensure your answer is directly relevant to the question and the provided context.
-
-**Student Background (if provided):**
-{request.user_context if request.user_context else "N/A"}
-
-**Context from the textbook:**
-{context if context else "No relevant context found in the textbook."} 
-
-**Student's Question:**
-{request.question}
-
-**Answer:**
-"""
-        
-        chat_response = cohere_client_instance.chat(
-            model='command-r', # Optimized for RAG and instruction following
-            message=prompt
-        )
-        
-        # Defensive handling: Empty or truncated Cohere generation
-        if not chat_response.text:
-            logger.warning("Cohere generation returned an empty response.")
-            return {"answer": "I received an empty response from the AI. Please try again or ask a different question."}
-
-        logger.info("Cohere answer generated successfully.") # Debug log
-        
-        return {"answer": chat_response.text}
+        final_response = chat_completion.choices[0].message.content
+        if not final_response:
+             logger.warning("LLM returned an empty response.")
+             final_response = "I'm sorry, but I was unable to generate a response."
 
     except Exception as e:
-        logger.error(f"Cohere API (generation) failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate answer: {e}"
-        )
+        logger.error(f"Chat completion failed. Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate chat response: {e}")
 
-# --- Uvicorn Runner ---
+    return ChatResponse(response=final_response)
+
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting FastAPI server with Uvicorn...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # This allows running the app directly for development
+    # Use `uvicorn src.main:app --reload` for production-like Gunicorn/Uvicorn workers
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)
