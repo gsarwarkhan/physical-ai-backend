@@ -25,6 +25,10 @@
   background-color: #f1f1f1;
   border-radius: 5px;
   min-height: 50px;
+  max-height: 300px; /* Added for scroll */
+  overflow-y: auto;   /* Added for scroll */
+  white-space: pre-wrap; /* Added for formatting */
+  word-wrap: break-word; /* Added for long words */
   display: flex;
   align-items: center;
   color: #333;

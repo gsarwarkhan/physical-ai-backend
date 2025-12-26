@@ -4,36 +4,46 @@ import styles from './chat.module.css';
 export default function Root({children}) {
   const [input, setInput] = useState("");
   const [answer, setAnswer] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const askAI = async () => {
+    setAnswer(""); // Clear previous answer
+    setLoading(true);
     try {
-      const fetchUrl = "http://localhost:8000/ask"; // Absolute URL
+      const fetchUrl = "http://localhost:8000/chat";
       console.log(`[Frontend] Attempting to fetch from: ${fetchUrl}`);
 
       const res = await fetch(fetchUrl, {
-        method: "POST", // Correct method
+        method: "POST",
         headers: { 
-          "Content-Type": "application/json" // Correct header
+          "Content-Type": "application/json"
         },
-        body: JSON.stringify({ question: input, user_context: "" }) // Correct JSON body
+        body: JSON.stringify({ prompt: input })
       });
 
-      console.log(`[Frontend] Fetch response status: ${res.status}`); // Log status BEFORE json()
+      console.log(`[Frontend] Fetch response status: ${res.status}`);
 
-      if (!res.ok) { // Check if response status is 2xx
-        // Attempt to parse error as JSON, fallback to statusText
-        const errorData = await res.json().catch(() => ({ message: res.statusText || 'Unknown error during JSON parse' }));
-        console.error(`[Frontend] Fetch failed with status ${res.status}:`, errorData);
-        setAnswer(`Error: ${errorData.detail || errorData.message || 'Unknown error'}`);
-        return;
+      if (!res.ok) {
+        let errorDetail = `HTTP error! Status: ${res.status}`;
+        try {
+          const errorData = await res.json();
+          errorDetail = errorData.detail || JSON.stringify(errorData);
+        } catch (jsonError) {
+          // If response is not JSON, use status text
+          errorDetail = res.statusText || 'Unknown error';
+        }
+        console.error(`[Frontend] Fetch failed: ${errorDetail}`);
+        setAnswer(`Error: ${errorDetail}`);
+      } else {
+        const data = await res.json();
+        console.log("[Frontend] Received data:", data);
+        setAnswer(data.response);
       }
-
-      const data = await res.json(); // Correct JSON handling
-      console.log("[Frontend] Received data:", data);
-      setAnswer(data.answer); // Set answer
     } catch (error) {
-      console.error("[Frontend] Uncaught fetch error:", error); // Proper error handling
+      console.error("[Frontend] Uncaught fetch error:", error);
       setAnswer(`Failed to connect to backend: ${error.message || 'Network error'}. Check console for details.`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -42,9 +52,19 @@ export default function Root({children}) {
       {children}
       <div className={styles.chatContainer}>
         <div className={styles.chatBox}>
-          <p>{answer || "Ask me anything about the textbook..."}</p>
-          <input value={input} onChange={(e) => setInput(e.target.value)} />
-          <button onClick={askAI}>Ask AI</button>
+          <p>
+            {loading 
+              ? "Thinking..." 
+              : answer || "Ask me anything about the textbook..."}
+          </p>
+          <input 
+            value={input} 
+            onChange={(e) => setInput(e.target.value)} 
+            onKeyPress={(e) => e.key === 'Enter' && askAI()}
+          />
+          <button onClick={askAI} disabled={loading}>
+            {loading ? "Please wait" : "Ask AI"}
+          </button>
         </div>
       </div>
     </>

@@ -1,28 +1,29 @@
 import React from 'react';
 import clsx from 'clsx';
 import Layout from '@theme/Layout';
+import Link from '@docusaurus/Link';
 import styles from './index.module.css';
 
 const features = [
   {
     title: 'ROS 2',
     description: 'Learn Robot Operating System 2 for controlling physical robots and simulations.',
-    link: '/docs/01-Module-1-ROS2/index',
+    link: '/docs/ros2/intro',
   },
   {
     title: 'Digital Twin',
     description: 'Understand how to create digital replicas of real-world systems for testing and analysis.',
-    link: '/docs/02-Module-2-Digital-Twin/index',
+    link: '/docs/digital-twin/intro',
   },
   {
     title: 'AI-Robot Brain',
     description: 'Explore AI integration for humanoid robotics and autonomous decision-making.',
-    link: '/docs/03-Module-3-Isaac-Sim/index',
+    link: '/docs/ai-robot-brain/intro',
   },
   {
     title: 'VLA',
     description: 'Learn Virtual Learning Agents for advanced human-robot interaction scenarios.',
-    link: '/docs/04-Module-4-VLA/index',
+    link: '/docs/vla/intro',
   },
 ];
 
@@ -35,7 +36,7 @@ function Feature({title, description, link}) {
           <p>{description}</p>
         </div>
         <div className="card__footer">
-          <a className="button button--primary" href={link}>Explore Module</a>
+          <Link className="button button--primary" to={link}>Explore Module</Link>
         </div>
       </div>
     </div>
