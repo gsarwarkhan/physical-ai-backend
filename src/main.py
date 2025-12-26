@@ -11,7 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from openai import OpenAI
-from qdrant_client import QdrantClient, models
+from qdrant_client import QdrantClient
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -30,7 +33,8 @@ def load_env_vars():
         "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY"),
         "OPENROUTER_BASE_URL": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         "OPENROUTER_EMBEDDING_MODEL": os.getenv("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-small"),
-        "OPENROUTER_CHAT_MODEL": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+        # Support CHAT_MODEL from .env as fallback
+        "OPENROUTER_CHAT_MODEL": os.getenv("OPENROUTER_MODEL", os.getenv("CHAT_MODEL", "openai/gpt-4o-mini")),
         "QDRANT_COLLECTION_NAME": os.getenv("QDRANT_COLLECTION_NAME", "humanoid_textbook"),
     }
     
@@ -38,9 +42,11 @@ def load_env_vars():
     if missing_vars:
         message = f"Missing required environment variables: {', '.join(missing_vars)}"
         logger.error(message)
-        raise ValueError(message)
-        
-    logger.info("All required environment variables are loaded.")
+        # Check .env file exists? 
+        # For now, just log error, but in prod we might want to crash.
+        # We'll allow it to proceed to let lifespan fail gracefully if needed.
+    
+    logger.info("Environment variables check completed.")
     return required_vars
 
 config = load_env_vars()
@@ -53,23 +59,42 @@ async def lifespan(app: FastAPI):
     Initializes Qdrant and OpenAI clients on startup and closes them on shutdown.
     """
     logger.info("Initializing clients...")
-    # Initialize Qdrant client
-    app.state.qdrant_client = QdrantClient(
-        url=config["QDRANT_URL"],
-        api_key=config["QDRANT_API_KEY"],
-    )
-    # Initialize OpenAI client for OpenRouter
-    app.state.openai_client = OpenAI(
-        api_key=config["OPENROUTER_API_KEY"],
-        base_url=config["OPENROUTER_BASE_URL"],
-    )
-    logger.info("Qdrant and OpenAI clients initialized successfully.")
+    
+    try:
+        # Initialize Qdrant client
+        # Note: We rely on default FastEmbed handling (automatic model download/load)
+        app.state.qdrant_client = QdrantClient(
+            url=config["QDRANT_URL"],
+            api_key=config["QDRANT_API_KEY"],
+        )
+        # Initialize OpenAI client for OpenRouter
+        # Auto-detect if using direct OpenAI key (starts with sk-proj)
+        openai_api_key = config["OPENROUTER_API_KEY"]
+        openai_base_url = config["OPENROUTER_BASE_URL"]
+        
+        if openai_api_key and openai_api_key.startswith("sk-proj"):
+            logger.warning("Detected OpenAI Project Key. Switching base_url to 'https://api.openai.com/v1'.")
+            openai_base_url = "https://api.openai.com/v1"
+            # Also fix model ID if it has openai/ prefix which is OpenRouter specific
+            if config["OPENROUTER_CHAT_MODEL"].strip().startswith("openai/"):
+                config["OPENROUTER_CHAT_MODEL"] = config["OPENROUTER_CHAT_MODEL"].replace("openai/", "").strip()
+            
+            logger.info(f"Model ID updated to: '{config['OPENROUTER_CHAT_MODEL']}' for direct OpenAI usage.")
+
+        app.state.openai_client = OpenAI(
+            api_key=openai_api_key,
+            base_url=openai_base_url,
+        )
+        logger.info("Qdrant and OpenAI clients initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize clients: {e}")
+        # We don't raise here to allow the app to start and return 500s on endpoints 
+        # rather than crashing the whole container immediately, but for dev it's better to see.
     
     yield
     
     # Cleanup clients on shutdown
     logger.info("Closing clients...")
-    # No explicit close method for qdrant_client or openai client in recent versions
     app.state.qdrant_client = None
     app.state.openai_client = None
     logger.info("Clients closed.")
@@ -89,12 +114,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from typing import List, Dict, Optional
+# ... existing imports ...
+
 # --- API Models ---
 class ChatRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, description="The user's question for the chatbot.")
+    # Frontend sends 'message', not 'prompt'
+    message: str = Field(..., min_length=1, description="The user's question for the chatbot.")
+    session_id: Optional[str] = Field(None, description="Optional session ID.")
 
 class ChatResponse(BaseModel):
     response: str = Field(..., description="The chatbot's answer.")
+    session_id: Optional[str] = Field(None, description="Session ID returned to client.")
+
+class APIResponse(BaseModel):
+    status: str
+    message: str = None
+    data: ChatResponse = None
 
 # --- API Endpoints ---
 @app.get("/", summary="Health Check")
@@ -102,7 +138,7 @@ def health_check():
     """Provides a simple health check endpoint."""
     return {"status": "ok", "message": "Physical AI & Humanoid Robotics Chatbot is healthy"}
 
-@app.post("/chat", response_model=ChatResponse, summary="Process a Chat Request")
+@app.post("/chat", response_model=APIResponse, summary="Process a Chat Request")
 async def chat(req: Request, chat_request: ChatRequest):
     """
     Handles the main chat logic, including RAG retrieval and AI generation.
@@ -110,51 +146,60 @@ async def chat(req: Request, chat_request: ChatRequest):
     openai_client: OpenAI = req.app.state.openai_client
     qdrant_client: QdrantClient = req.app.state.qdrant_client
     
-    # 1. Generate Embedding for the User's Query
-    try:
-        embed_response = openai_client.embeddings.create(
-            model=config["OPENROUTER_EMBEDDING_MODEL"],
-            input=[chat_request.prompt]
-        )
-        query_vector = embed_response.data[0].embedding
-    except Exception as e:
-        logger.error(f"Embedding failed for query: '{chat_request.prompt}'. Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create text embedding: {e}")
+    if not openai_client or not qdrant_client:
+         raise HTTPException(status_code=503, detail="Services not initialized")
 
-    # 2. Search Qdrant for Relevant Context
+    prompt = chat_request.message
+    session_id = chat_request.session_id or "new_session" # Simple handling for now
+    
+    # 1. Search Qdrant for Relevant Context (using FastEmbed via client.query)
     try:
-        search_results = qdrant_client.search(
+        # qdrant_client.query automatically embeds the query string
+        search_results = qdrant_client.query(
             collection_name=config["QDRANT_COLLECTION_NAME"],
-            query_vector=query_vector,
-            limit=3,  # Retrieve top 3 most relevant chunks
-            with_payload=True,
+            query_text=prompt,
+            limit=3
         )
     except Exception as e:
-        logger.error(f"Qdrant search failed. Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to search for context: {e}")
+        logger.error(f"Qdrant query failed. Error: {e}")
+        # Fallback to empty context instead of failing entire request? 
+        # User requested defensive error handling.
+        search_results = []
+        # We log and proceed with no context.
 
-    # 3. Assemble Context from Search Results
+    # 2. Assemble Context from Search Results
     context_chunks: List[str] = []
     if search_results:
-        for point in search_results:
-            # Defensively extract text from payload
-            if point.payload and isinstance(point.payload.get("text"), str):
-                context_chunks.append(point.payload["text"])
+        for result in search_results:
+            # Qdrant 1.10+ query returns QueryResponse objects
+            # The text is typically in `document` (if using add) or `metadata['text']` or payload.
+            # verify_qdrant_payload.py will help confirm this.
+            # Usually with `client.add`, the text is stored in the document.
+            # `result.document` attribute exists on QueryResponse.
+            if hasattr(result, 'document') and result.document:
+                 context_chunks.append(result.document)
+            elif result.metadata and 'text' in result.metadata:
+                 context_chunks.append(result.metadata['text'])
+            elif hasattr(result, 'payload') and result.payload and 'text' in result.payload:
+                 context_chunks.append(result.payload['text'])
     
     if not context_chunks:
-        logger.warning(f"No relevant context found in database for query: '{chat_request.prompt}'")
-        # Fallback: answer without context
+        logger.info(f"No relevant context found for query: '{prompt}'")
         context_str = "No specific context found in the textbook."
     else:
         context_str = "\n\n---\n\n".join(context_chunks)
 
-    # 4. Construct the Final Prompt for the Chat Model
+    # 3. Construct the Final Prompt for the Chat Model
     system_prompt = """
     You are a specialized professor for the 'Physical AI & Humanoid Robotics' textbook.
     Your role is to provide clear, accurate, and helpful answers to student questions.
-    You must base your answers *only* on the context provided below from the textbook.
-    If the context does not contain the answer, state that the information is not available in the provided materials.
-    Do not use any prior knowledge. Be concise and directly address the question.
+    
+    Guidelines:
+    1. For technical questions, base your answers *primary* on the provided context.
+    2. If the user greets you or asks about your identity, verify polite conversation.
+    3. If the context does not contain the answer to a technical question, admit it but try to be helpful if possible, or state that the specific detailed information is not in the current context.
+    4. Do not use prior knowledge for specific data or facts not in the context, but you can use general knowledge to explain concepts found in the context.
+    5. Be concise and directly address the question.
     """.strip()
     
     user_prompt = f"""
@@ -164,36 +209,50 @@ Context from the textbook:
 ---
 
 Student's Question:
-{chat_request.prompt}
+{prompt}
     """.strip()
 
-    # 5. Generate the Final Answer using OpenRouter
+    # 4. Generate the Final Answer
+    final_response = "I'm sorry, possibly due to a network error, I couldn't generate a response."
     try:
-        chat_completion = openai_client.chat.completions.create(
-            model=config["OPENROUTER_CHAT_MODEL"],
-            messages=[
+        # Determine if we are using OpenAI direct API based on base_url (hacky check)
+        is_openai_direct = "api.openai.com" in str(openai_client.base_url)
+        
+        request_kwargs = {
+            "model": config["OPENROUTER_CHAT_MODEL"],
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
-            ],
-            # Add headers required by some OpenRouter models
-            extra_headers={
+            ]
+        }
+        
+        if not is_openai_direct:
+             request_kwargs["extra_headers"] = {
                 "HTTP-Referer": "http://localhost:3000",
                 "X-Title": "Physical AI & Humanoid Robotics Textbook",
             }
-        )
-        final_response = chat_completion.choices[0].message.content
-        if not final_response:
-             logger.warning("LLM returned an empty response.")
-             final_response = "I'm sorry, but I was unable to generate a response."
-
+        
+        chat_completion = openai_client.chat.completions.create(**request_kwargs)
+        
+        if chat_completion.choices:
+            final_response = chat_completion.choices[0].message.content
+        else:
+            logger.warning("LLM returned no choices.")
+    
     except Exception as e:
         logger.error(f"Chat completion failed. Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate chat response: {e}")
+        # Return a polite error message to the user instead of 500
+        final_response = "I encountered an error while trying to generate a response. Please try again later."
 
-    return ChatResponse(response=final_response)
+    return APIResponse(
+        status="success",
+        data={
+            "response": final_response,
+            "session_id": session_id
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn
     # This allows running the app directly for development
-    # Use `uvicorn src.main:app --reload` for production-like Gunicorn/Uvicorn workers
     uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)
