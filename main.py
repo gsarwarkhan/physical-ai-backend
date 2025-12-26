@@ -18,35 +18,36 @@ from crud import (
 )
 
 # --------------------------
-# Logging Configuration
+# Logging
 # --------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --------------------------
-# FastAPI App & CORS
+# FastAPI App
 # --------------------------
-app = FastAPI(title="Physical AI & Humanoid Robotics Chatbot")
+app = FastAPI()
 
-# Allow both localhost for dev and Vercel URLs
+# CORS
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://hackathon-1-q4.vercel.app"
+]
+if allowed_origins_env:
+    allowed_origins.extend([origin.strip() for origin in allowed_origins_env.split(",")])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "https://hackathon-1-q4.vercel.app",
-        "https://physical-ai-backend.vercel.app"
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # --------------------------
-# Request / Response Models
+# Models
 # --------------------------
 class ChatRequest(BaseModel):
     session_id: Optional[UUID] = None
@@ -82,7 +83,7 @@ def on_startup():
 # --------------------------
 @app.get("/")
 def health_check():
-    return {"status": "ok", "message": "RAG Chatbot API is running"}
+    return {"status": "ok", "message": "Physical AI & Humanoid Robotics Chatbot is healthy"}
 
 # --------------------------
 # Chat Endpoint
@@ -94,9 +95,6 @@ def health_check():
 })
 async def chat(request: ChatRequest, db_session: Session = Depends(get_session)):
     try:
-        # --------------------------
-        # Handle Chat Session
-        # --------------------------
         chat_session: Optional[ChatSession] = None
 
         if request.session_id:
@@ -106,9 +104,7 @@ async def chat(request: ChatRequest, db_session: Session = Depends(get_session))
             chat_session = create_new_chat_session(db_session)
             logger.info(f"Created new chat session: {chat_session.id}")
 
-        # --------------------------
-        # Retrieve conversation
-        # --------------------------
+        # Conversation history
         db_messages = get_messages_for_session(db_session, chat_session.id)
         conversation_history = [{"sender": msg.sender, "text": msg.text} for msg in db_messages]
 
@@ -116,9 +112,7 @@ async def chat(request: ChatRequest, db_session: Session = Depends(get_session))
         conversation_history.append({"sender": "user", "text": request.message})
         add_message_to_session(db_session, chat_session.id, "user", request.message)
 
-        # --------------------------
         # Get AI response
-        # --------------------------
         ai_response_text = ai_wrapper.get_ai_response(conversation_history)
         add_message_to_session(db_session, chat_session.id, "ai", ai_response_text)
 
@@ -148,9 +142,9 @@ async def chat(request: ChatRequest, db_session: Session = Depends(get_session))
         )
 
 # --------------------------
-# Run server (for local testing)
+# Local development support only
 # --------------------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=True)

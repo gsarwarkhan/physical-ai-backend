@@ -1,7 +1,7 @@
 // src/api.js
 import axios from 'axios';
 
-const API_BASE_URL = "http://localhost:8001";
+const API_BASE_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8001";
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -20,9 +20,9 @@ export const chatWithAI = async (message, sessionId = null) => {
     const data = response.data; // Axios automatically parses JSON
 
     if (data.status === "success") {
-      return { 
-        response: data.data.response, 
-        session_id: data.data.session_id 
+      return {
+        response: data.data.response,
+        session_id: data.data.session_id
       };
     } else {
       // This case should ideally not be hit if backend always returns success on 2xx
