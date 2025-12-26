@@ -30,7 +30,7 @@ def load_env_vars():
         "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY"),
         "OPENROUTER_BASE_URL": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         "OPENROUTER_EMBEDDING_MODEL": os.getenv("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-small"),
-        "OPENROUTER_CHAT_MODEL": os.getenv("OPENROUTER_MODEL", "mistralai/mixtral-8x7b-instruct"),
+        "OPENROUTER_CHAT_MODEL": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
         "QDRANT_COLLECTION_NAME": os.getenv("QDRANT_COLLECTION_NAME", "humanoid_textbook"),
     }
     
